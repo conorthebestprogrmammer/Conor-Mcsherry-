@@ -1,0 +1,395 @@
+<#
+
+    
+    Conor McSherry K172 System Administration Assignment
+    
+    .SYNOPSIS
+    This script creates New active directory accounts for users, import from a CSV or manually. and exports to a csv with login username and first time password creation and creates as error report 
+    if user currently exists 
+    
+    csv format :
+    firstname, lastname, department
+
+    Run AS Admin if module needs installing and executionpolicy change
+     
+
+#>
+
+
+
+############################################################################ Checking Prerequisites ###################################################################################
+
+# Get what the Powershell Script executionpolicy is set for
+$ExecutionPoilcy = Get-ExecutionPolicy
+# If execution policy is not equal to unrestricted 
+if($ExecutionPoilcy -ne "Unrestricted")
+{
+    # Set the execution poilcy scope to allow the script to run
+    Set-ExecutionPolicy -ExecutionPolicy "bypass" -Force -Scope CurrentUser
+}
+
+# Check to see if the active directory module is not installed
+if (!(Get-Module -ListAvailable -Name ActiveDirectory)) 
+{
+    # Print message installing powershell module
+    Write-Host "Module does not exist"
+    # Install the active directory module ---- REF: http://woshub.com/install-rsat-feature-windows-10-powershell/
+    Add-WindowsCapability -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0 -Online
+} 
+
+
+############################################################################ Declare Variables ###################################################################################
+
+
+# Declare Location of import csv path
+$ImportFile = "C:\temp\NewUsers.csv"
+
+$NewUsersProcessing = @()
+
+# Declare user output array
+$userOutput = @()
+
+# Declare output csv
+$UserOutputCSV = "C:\temp\AccountsCreated.csv"
+
+# Declare Error Array
+$ErrorOutput = @()
+$ErrorOutputCSV = "C:\temp\NewUserError.csv"
+
+# Declare Password creation Variables
+$Upper   = 'ABCDEFGHKLMNOPRSTUVWXYZ'
+$Lower   = 'abcdefghiklmnoprstuvwxyz'
+$Number  = '1234567890'
+$Special = '!"$%/()=?}][{@#*+'
+
+############################################################################ Load Drawing Forms ###################################################################################
+
+#Load two .NET Framework classes: System.Drawing and System.Windows.Forms. ---- REF: https://docs.microsoft.com/en-us/powershell/scripting/samples/creating-a-custom-input-box?view=powershell-7.2
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+############################################################################ Create Functions #####################################################################################
+
+# --- REF: https://www.computerperformance.co.uk/powershell/functions/
+
+#Create a Function to randomize characters
+function Get-RandomCharacters 
+{
+    #Add two parameters to the Function
+    Param(
+         [Parameter(Mandatory=$true)][int]$length,
+         [Parameter(Mandatory=$true)][string]$characters
+    )
+    
+    #Create a random variable, for 1 to specified integer in the length parameter, and use the get-random cmdlet to randomise the character parameter
+    $random = 1..$length | ForEach-Object { Get-Random -Maximum $characters.length }
+    
+    #Private and only visible to the current scope. $OFS is a special variable that contains the string to be used as the Ouptut Field Sperator. This string is used when an array is converted to a string.  By default, this is ” ” but you can change it.
+    $private:ofs=""   # ---- REF: https://blogs.msdn.microsoft.com/powershell/2006/07/15/psmdtagfaq-what-is-ofs/
+    
+    #Return the contents of the random variable with the number of characters specified when running the function 
+    return [String]$characters[$random]
+}
+
+#Create a Function to jumble the password array            
+function Randomise-String
+{     
+    Param(
+        #Add to parameter to the Function, being mandatory and a string value
+        [Parameter(Mandatory=$true)][string]$inputString
+    )
+
+    #Copies the characters of the input string into the Unicode character array.
+    $characterArray = $inputString.ToCharArray()  
+    
+    #Copies the characters after randomising the array
+    $scrambledStringArray = $characterArray | Get-Random -Count $characterArray.Length     
+    
+    #Joins for the unicode array to single line string
+    $outputString = -join $scrambledStringArray
+    
+    #Return the contents of the outputstring variable
+    return $outputString 
+}
+
+#Function to create a form    REF: https://docs.microsoft.com/en-us/powershell/scripting/samples/creating-a-custom-input-box?view=powershell-7.2
+Function Create-Form 
+{
+            param (
+                        $formText,
+                        $LabelText,
+                        $AddTextBox,
+                        $OKBoxText,
+                        $CancelBoxText
+            )
+
+            # Create an instance of the Form class, assign values to three properties of this class.
+            $form = New-Object System.Windows.Forms.Form
+            $form.Text = $formText
+            $form.Size = New-Object System.Drawing.Size(300,200)
+            $form.StartPosition = 'CenterScreen'
+
+            # Create an OK button
+            $okButton = New-Object System.Windows.Forms.Button
+            $okButton.Location = New-Object System.Drawing.Point(75,120)
+            $okButton.Size = New-Object System.Drawing.Size(75,23)
+            $okButton.Text = $OKBoxText
+            $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.AcceptButton = $okButton
+            $form.Controls.Add($okButton)
+
+            # Create an ancel button
+            $cancelButton = New-Object System.Windows.Forms.Button
+            $cancelButton.Location = New-Object System.Drawing.Point(150,120)
+            $cancelButton.Size = New-Object System.Drawing.Size(75,23)
+            $cancelButton.Text = $CancelBoxText
+            $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+            $form.CancelButton = $cancelButton
+            $form.Controls.Add($cancelButton)
+
+            # Provide label text
+            $label = New-Object System.Windows.Forms.Label
+            $label.Location = New-Object System.Drawing.Point(10,20)
+            $label.Size = New-Object System.Drawing.Size(280,20)
+            $label.Text = $LabelText
+            $form.Controls.Add($label)
+
+            $form.Topmost = $true
+
+                    if($AddTextBox -eq $true){
+                    # 	The variable exists in the script scope, which is the nearest script file’s scope, or Global if one is not available
+                    # ---- REF: https://www.varonis.com/blog/powershell-variable-scope
+                    $Script:textBox = New-Object System.Windows.Forms.TextBox
+                    $textBox.Location = New-Object System.Drawing.Point(10,40)
+                    $textBox.Size = New-Object System.Drawing.Size(260,20)
+                    $form.Controls.Add($textBox)
+                    $form.Add_Shown({$textBox.Select()})
+            }
+
+            # 	The variable exists in the script scope, which is the nearest script file’s scope, or Global if one is not available
+            # ---- REF: https://www.varonis.com/blog/powershell-variable-scope
+            $Script:result = $form.ShowDialog()
+}
+
+############################################################################ Import Users From CSV  ###################################################################################
+
+# Import the users from the csv to NewUsers Variable
+$NewUsers = Import-Csv $ImportFile
+
+# Loop though each of the users in the NewUsers Variable, this way we can add manual users later to this NewUsersProcessing array oblject
+Foreach($User in $NewUsers)
+{
+            # Print to screen a message adding CSV users
+            write-host "Adding $($user.firstname) $($user.lastname) into the $($user.department) department" -ForegroundColor Cyan
+
+            # Create the PSCustom Obect ---- REF: https://docs.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-pscustomobject?view=powershell-7.2
+            $NewUsersProcessing += [PSCustomObject]@{
+                    #add properties to the PSCustomObject
+                    "FirstName"        = $user.firstname
+                    "LastName"         = $user.lastname
+                    "Department"       = $user.department 
+            
+            }
+
+            # Clear up variables as it passes through the loop ---- REF: https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/clear-variable?view=powershell-7.2
+            Clear-Variable User
+
+}
+
+
+############################################################################ Add Manual Input Users  ###################################################################################
+
+# Call the form function created earlier to prompt user if they want to add manual users, no textbox parameter called
+Create-Form -formText 'User Entry Option' -LabelText 'Would you like to add any users manually?' -OKBoxText "Yes" -CancelBoxText "No"
+
+# If user clicks OK on the form to add new users
+if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+{
+    # Call the form function to get the number of manual users to add
+    Create-Form -formText "User Entry:" -LabelText "How Many Manual Users would you like to add:" -AddTextBox $true -OKBoxText "OK" -CancelBoxText "Cancel"
+        
+        # Pass the integer contents from text box to the NoOfUsers variable
+        [int]$NoOfUsers = $textBox.Text
+        
+        # Declare a counter variable $i
+        $i = 1
+            
+            # Go around the loop while the counter is less than or equal to the inputed no of users
+            do
+            {
+                # Increase the value of the couter by one every time the loop goes around
+                $i++
+                
+                # If user clicks yes to add manual interger value
+                if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+                {
+                    
+                    # Call the form function to get the first name value
+                    Create-Form -formText "User Entry:" -LabelText "Please Enter New Users First Name:" -AddTextBox $true -OKBoxText "OK" -CancelBoxText "Cancel"
+                    
+                    # Pass the string contents from text box to the First variable
+                    [string]$First = $textBox.Text
+                    
+                    # If user clicks ok to add a first name
+                    if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+                    {
+                        # Call the form function to get the last name value
+                        Create-Form -formText "User Entry:" -LabelText "Please Enter New Users Second Name:" -AddTextBox $true -OKBoxText "OK" -CancelBoxText "Cancel"
+                        
+                        # Pass the string contents from text box to the Last variable
+                        [string]$Last = $textBox.Text
+                    
+                        # If users clicks ok to add to add last name
+                        if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+                        {
+                            # Call the form function to get the department value
+                            Create-Form -formText "User Entry:" -LabelText "Please Enter New Users Department:" -AddTextBox $true -OKBoxText "OK" -CancelBoxText "Cancel"
+                            
+                            # Pass the string contents from text box to the Department variable
+                            [string]$Department = $textBox.text
+
+                            # If a user has entered a value for first and last name and a department
+                            If($First -and $Last -and $department)
+                            {
+                                    # Print to screen a message adding manual user
+                                    write-host "Adding Manual user: $($First) $($Last) into the $($Department) department" -ForegroundColor Green
+                                     
+                                     # Add manual users to the PSCustom Obect ---- REF: https://docs.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-pscustomobject?view=powershell-7.2
+                                     $NewUsersProcessing += [PSCustomObject]@{
+                                        #add properties to the PSCustomObject
+                                        "FirstName"        = $First
+                                        "LastName"         = $Last
+                                        "Department"       = $Department
+            
+                                     }
+                    
+                            # End of entered a value for first and last name and a department
+                            }
+                            
+                            # Else an error waring because not all values entered for first and last name and a department
+                            Else
+                            {
+                                # Print warning to screen
+                                Write-Warning "Error adding $($First) $($Last) into the $($Department)"
+                            
+                            # End of else statement
+                            }
+                         
+                         # End of ok to add to add last name
+                         }
+                    
+                    # End of ok to add a first name
+                    }
+
+                # End of yes to add manual interger value
+                }
+            
+            # End of do loop
+            }while($i -le $NoOfUsers)
+
+# End of OK on the form to add new users
+}
+
+############################################################################ Add then Create New Users ###################################################################################
+
+#Loop through the users in the csv
+Foreach($user in $NewUsersProcessing){
+
+    
+    $Firstname   = $User.firstname
+    $Lastname    = $User.lastname
+    $samaccountname =  $Firstname +"."+$Lastname
+
+       #Check if the user account already exists in AD
+       if (Get-ADUser -F {SamAccountName -eq $samaccountname})
+       {
+               #If user does exist, output a warning message
+               Write-Warning "A user account $($samaccountname) already exists in Active Directory."
+               $ErrorOutput += "$($samaccountname) already exists in Active Directory."
+       }
+       else
+       {
+
+            # Create samaccountname
+            $Userprincipalname  = $samaccountname+"@DKIT.ie"
+            
+            # Create 5 lowercase characters for password string
+            $password  = Get-RandomCharacters -length 5 -characters $Lower
+            
+            # Add an uppercase character to password string 
+            $password += Get-RandomCharacters -length 1 -characters $Upper
+            
+            # Add a number character to password string
+            $password += Get-RandomCharacters -length 1 -characters $Number
+            
+            # Add a special character to password string
+            $password += Get-RandomCharacters -length 1 -characters $Special
+            
+            # Jumble the string around
+            $password  = Randomise-String $password
+
+            # Create OU
+            $OU = "OU=Students,OU=Dundalk,OU=Ireland,DC=DKIT,DC=ie"
+
+            # Create DisplayName
+            $DisplayName = "$($Lastname), $($Firstname)" 
+
+            # Create Department
+            $Department = $User.department
+
+            
+            # ---- REF: https://docs.microsoft.com/en-us/powershell/module/activedirectory/new-aduser?view=windowsserver2022-ps
+            # Account will be created in the OU listed in the $OU variable
+             New-ADUser `
+            -SamAccountName $samaccountname `
+            -UserPrincipalName $Userprincipalname `
+            -Name "$Firstname $Lastname" `
+            -GivenName $Firstname `
+            -Surname $Lastname `
+            -Enabled $True `
+            -ChangePasswordAtLogon $True `
+            -DisplayName $DisplayName `
+            -Department $Department `
+            -Path $OU `
+            -AccountPassword (convertto-securestring $Password -AsPlainText -Force) `
+            -whatif # What if parameter passed to show what the cmd will do with out executing
+
+          
+            # Create the PSCustom Obect ---- REF: https://docs.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-pscustomobject?view=powershell-7.2
+            $userOutput += [PSCustomObject]@{
+                    #add properties to the PSCustomObject
+                    "User logon name"        = $samaccountname
+                    "User Onetime Password"  = $password 
+                    "Email"                  = $Userprincipalname
+                    "Department"             = $Department
+                    "DisplayName"            = $DisplayName
+                    "OU"                     = $OU
+            
+            }
+
+
+            # Clear up variables as it passes through the loop ---- REF: https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/clear-variable?view=powershell-7.2
+            Clear-Variable Userprincipalname
+            Clear-Variable password
+
+       
+    }
+
+            Clear-Variable SamAccountName
+            Clear-Variable User
+            Clear-Variable Firstname
+            Clear-Variable Lastname
+            Clear-Variable Department
+            Clear-Variable DisplayName
+
+}
+
+# Export the login information to csv
+$UserOutput | export-csv $UserOutputCSV -NoTypeInformation
+
+# If any error users
+if($ErrorOutput)
+{
+    # Export the Error information to csv
+    $ErrorOutput | export-csv $ErrorOutputCSV -NoTypeInformation
+}
