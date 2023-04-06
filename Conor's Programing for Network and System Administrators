@@ -1,0 +1,146 @@
+
+"""
+Programming for System Administration & Networking Project CA2
+
+Conor McSherry - Year 2 Networking & System Administration 
+
+A python script to get computer system information and export to a CSV file.
+Must have Psutil installed. If not used this command in command prompt for PC pip install psutill or python -m install psutill. For laptop it is py install psutil 
+
+"""
+
+# importing modules
+import os, csv, platform, socket, psutil, re, uuid, socket 
+
+# Declare Variables
+CSV_path = 'C:/temp/'
+CSV_name = 'System_Information.csv'
+
+# Create a function called get_systeminfo, to collect several different pieces of machine info
+def get_systeminfo():
+    
+    # Try Block to test for errors
+    try:         
+        # Create an empty dictionary
+        info = {}
+        # Use the modules loaded to get machine info
+        info['FQDN']            = socket.getfqdn()
+        info['Logged On User']  = os.getlogin()
+        info['OS']              = platform.system()
+        info['OS Release']      = platform.release()
+        info['OS Version']      = platform.version()
+        info['OS Architecture'] = platform.machine() 
+        info['IP_Address']      = get_ip()
+        info['MAC-address']     = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+        info['Processor']       = platform.processor()
+        info['RAM']             = str(round(psutil.virtual_memory().total / (1024.0 **3)))+" GB"
+        info['Computer-Hostname'] = socket.gethostname()
+
+
+      
+
+    # If we catch an error
+    except Exception:
+        print(Exception)
+    return info
+
+# Create a function called get_ip, thhis returns the Primary IP, when multiple interfaces exist like hyper V
+def get_ip():
+    # Create Socket Object socket.socket(family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None)
+    # AFInet for IPv4, 
+    # SOCK_DGRAM is a datagram-based protocol using UDP and uses less network resources
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # setTimeout() buys you some time until the DOM elements are loaded, even if is set to 0.
+    s.settimeout(0)
+    # Try Block to test for errors
+    try:
+        # Open the socket connection, IP doesn't even have to be reachable, connect() for UDP doesn't send packets
+        s.connect(('10.254.254.254', 1))
+        # get the default IP assign it to IP Variable
+        IP = s.getsockname()[0]
+    # If we catch an error
+    except Exception:
+        IP = '127.0.0.1'
+    # Execute regardless of error or not
+    finally:
+        # Close the socket connection
+        s.close()
+    # Return the IP
+    return IP
+# I used this source to find the ip address.Source( https://www.geeksforgeeks.org/python-program-find-ip-address/)
+# Assign the IP a variable
+IP_Address = get_ip()
+#Assign the hostname a varible called socket.gethostname 
+hostname = socket.gethostname()
+#Assign the IP_Address a varible called socket.gethostname(hostname) 
+IP_Address = socket.gethostbyname(hostname)
+# Print the Computer host name out to screen 
+print("Your Computer Name is:" + hostname)
+#Print the Computer IP address is out to screen 
+print("Your Computer IP Address is:" + IP_Address)
+# I used this source to help with pinging the ip address. Source(https://www.youtube.com/watch?v=hDXT6dfTVBk&t=91s)
+# Clears the screen in windows after pinging the ip address
+os.system('cls')
+# Prints the hashtag key(#) in a row of 60
+print('#' *60)
+#Assign the ip_to_check  a varible called IP_Address
+ip_to_check = IP_Address
+# Prints the line key(-) in a row of 60
+print('-' *60)
+# Pinging the IP address from above to check if its active or not by using IP_Address above varible.
+#This code makes it cross platform between linux and windows
+os.system('Ping  {}'.format(ip_to_check))
+# Press any key after run to exit 
+input('Press any key to Exit')
+
+
+# Create a function called create_csv to test if a directory or file exists, if not create and write data to csv
+def create_csv( 
+                # Declare parameters to pass in the function
+                filePath,
+                fileName,
+                PC_header,
+                data
+            ):
+    
+    # Check whether the specified path exists or not
+    pathExist = os.path.exists(filePath)
+
+    # if path does not exist
+    if not pathExist:
+        # create the path
+        os.mkdir(filePath)
+    
+    # Create the fullpath including path and file
+    file = filePath+fileName
+    # Check whether the specified file exists or not
+    fileExist = os.path.exists(file)
+    
+    # If file does not exist
+    if fileExist:
+        # Delete the file to create a new file
+        os.remove(file)
+        with open(file, 'w') as file:
+            # Create a CSV writer
+            writer = csv.writer(file)
+            # Write the header row
+            writer.writerow(PC_header)
+            # 
+            writer.writerow(data)
+    else:
+        # Create the csv file
+        with open(file, 'w') as file:
+            # Create a CSV writer
+            writer = csv.writer(file)
+            # Write the header row
+            writer.writerow(PC_header)
+            # Write the data row
+            writer.writerow(data)
+
+# Call the functions           
+data = get_systeminfo()
+header = list(data.keys())
+sysdata = list(data.values())
+create_csv(CSV_path,CSV_name,header,sysdata)
+
+
